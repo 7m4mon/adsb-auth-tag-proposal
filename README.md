@@ -275,7 +275,12 @@ Let internet-connected receivers verify the tag using public key information
 Rotate keys at an interval shorter than the timestamp cycle
 ```
 
-This may be worth considering as a lightweight additional authentication method that maintains compatibility with existing ADS-B while helping deter simple spoofing and old replay attacks.
+This proposal explores a lightweight additional authentication mechanism that may help reduce simple ADS-B spoofing and old replay attacks while preserving compatibility with existing ADS-B receivers.
+
+The idea is intentionally simple. Anyone with basic knowledge of cryptographic authentication would probably think of a similar approach early on, and similar concepts may already have been discussed extensively in prior ADS-B security research.
+
+However, after confirming how technically straightforward ADS-B spoofing can be, I felt it would be unbalanced to discuss only the risk without also presenting a possible countermeasure direction.
+
 
 ## License
 CC0 1.0 Universal.
