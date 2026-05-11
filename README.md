@@ -278,4 +278,8 @@ Rotate keys at an interval shorter than the timestamp cycle
 This may be worth considering as a lightweight additional authentication method that maintains compatibility with existing ADS-B while helping deter simple spoofing and old replay attacks.
 
 ## License
+CC0 1.0 Universal.
+
+No attribution is required.  
+If this idea is useful, please use it freely to help reduce aviation security risks.
 The author does not intend to assert any copyright or patent rights over this proposal.
