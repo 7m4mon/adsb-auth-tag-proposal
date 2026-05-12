@@ -112,7 +112,7 @@ ME Type Code
 Timestamp
 ```
 
-This is a truncated HMAC, not a truncated public-key digital signature. A public-key signature normally requires the receiver to obtain the complete signature in order to verify it with the public key. Since this proposal only allocates 24 bits for the authentication tag, the tag is intended to be verified by recomputing an HMAC with shared key material on a trusted server.
+In this proposal, HMAC is used as a shared-secret authentication mechanism. It is not a public-key digital signature.
 
 ---
 
@@ -120,34 +120,47 @@ This is a truncated HMAC, not a truncated public-key digital signature. A public
 
 This scheme is intended to prove the following:
 
-> At that time, the legitimate transmitter possessing the secret key generated this message.
+> At that time, the legitimate transmitter possessing the shared secret key generated this authentication tag.
 
-Furthermore, if an internet-connected receiver sends the received raw authentication frame to a trusted verification server, and that server verifies the tag using the shared secret key assigned to the aircraft or transmitter, it can increase confidence in the following statement:
+The ADS-B frame itself carries only a short 24-bit authentication tag. Therefore, verification is performed by an internet-connected verification server that shares the corresponding secret key with the legitimate transmitter.
 
-> The aircraft was present in that airspace at that time.
+A receiver sends the received raw ADS-B authentication frame, for example as a HEX string, to the verification server. The server then recomputes the truncated HMAC using the secret key associated with the ICAO address and checks whether it matches the tag in the received frame.
 
-In this proposal, the receiver does not verify the HMAC using a public key. HMAC is a shared-secret-key mechanism. Therefore, the verification server must have access to the corresponding secret key, or to equivalent protected key material, in order to recompute the truncated HMAC and compare it with the tag received over ADS-B.
+This can increase confidence in the following statement:
+
+> The aircraft or transmitter associated with that key generated a valid authentication tag at that time.
+
+This does not prove the physical position by itself. Position plausibility should still be checked using received signal observations, multilateration, receiver network consistency, and other independent methods.
 
 ---
 
-## Internet Connectivity Is Required on the Receiver Side
+## Internet Connectivity and Verification Server
 
-This scheme assumes that the receiver can use the internet to query a trusted verification server.
+This scheme assumes that the receiver can communicate with an online verification server.
 
-The receiver sends the received ADS-B authentication frame, for example as a raw hexadecimal string, to the verification server. The server then:
+The verification server is expected to manage or access information such as:
 
-- Parses the DF17 frame
-- Checks the Mode S parity / CRC
-- Extracts the ICAO address, Type Code, timestamp, and truncated HMAC
-- Looks up the shared secret key or protected key material associated with that aircraft or transmitter
-- Recomputes the HMAC over the defined message fields
-- Compares the recomputed 24-bit tag with the received tag
-- Checks whether the timestamp is within an acceptable time window
-- Returns a verification result to the receiver
+- ICAO address
+- Key ID
+- Shared HMAC secret key or protected key material
+- Key validity period
+- Key rotation status
+- Revocation status
 
-In other words, this is not a scheme that can be completed entirely by a fully offline receiver. It also does not assume that the receiver obtains a public key and verifies a digital signature locally.
+In other words, this is not a scheme that can be completed entirely by a fully offline receiver.
 
-The intended use case is verification by internet-connected ground receiving stations or network-connected ADS-B receiver systems that can query an online verification service.
+The intended use case is verification by internet-connected ground receiving stations or network-connected ADS-B receiver systems.
+
+The receiver does not need to know the shared secret key. Instead, it can send the received frame to a verification server and receive a result such as:
+
+```json
+{
+  "ok": true,
+  "valid_crc": true,
+  "valid_auth": true,
+  "icao": "ABC123"
+}
+```
 
 ---
 
@@ -206,7 +219,7 @@ From this point of view, a 27-bit timestamp is easier to manage than a 24-bit ti
 
 ## Key Leakage and Updates
 
-This scheme assumes that each aircraft or transmitter has its own secret key.
+This scheme assumes that each aircraft or transmitter has its own shared secret key.
 
 If the secret key is stolen, any HMAC generated using that key can no longer be trusted.
 
@@ -214,10 +227,13 @@ In that case, the following actions are required:
 
 - Secret key revocation
 - HMAC key update
-- Verification server key-record update
-- Distribution of revocation or key-status information to verification servers
+- Verification server key database update
+- Distribution or synchronization of revocation information
+- Rejection of frames generated using the compromised key
 
-In other words, a key management mechanism is essential. The verification infrastructure must be able to register, rotate, revoke, and protect the shared secret keys used for HMAC verification.
+In other words, a key management mechanism is essential.
+
+This proposal does not specify the operational key management system. In a real deployment, keys would need to be provisioned, stored, rotated, and revoked using a secure process.
 
 ---
 
@@ -235,8 +251,8 @@ Existing receiver:
 
 Compatible receiver:
   Reads normal ADS-B frames and the additional authentication frame
-  Sends the raw authentication frame to an online verification server
-  Receives an authenticity result based on server-side HMAC verification
+  Sends the received authentication frame to an online verification server
+  Receives an authenticity result from the server
 ```
 
 ---
@@ -257,13 +273,111 @@ Adding a sequence number could be considered, but that would compromise compatib
 
 ---
 
+## Proof-of-Concept Programs
+
+This repository includes simple Python programs for demonstrating the basic idea.
+
+These programs are intended only for generating, decoding, and verifying HEX strings. They are not RF transmission tools.
+
+| File | Purpose |
+|---|---|
+| `generate_key.py` | Generates an HMAC shared-secret key file from a password/passphrase |
+| `make_auth_frame.py` | Creates a DF17 TC24 authenticity-tag frame as a 28-character HEX string |
+| `decode_auth_frame.py` | Decodes a 112-bit HEX frame and checks Mode S CRC/parity |
+| `verify_server.py` | Runs an HTTP server that verifies the received frame using the shared secret key |
+
+### Example
+
+Generate a key file:
+
+```bash
+mkdir keys
+python generate_key.py --icao ABC123 --password testpass --out keys/key_ABC123.json
+```
+
+Generate an authentication frame:
+
+```bash
+python make_auth_frame.py --key keys/key_ABC123.json --ca 5 --verbose
+```
+
+Decode the generated frame:
+
+```bash
+python decode_auth_frame.py 8DABC123C0XXXXXXXXXXXXXX
+```
+
+Start the verification server:
+
+```bash
+python verify_server.py --key-dir keys --host 127.0.0.1 --port 8000
+```
+
+Verify a frame via HTTP:
+
+```bash
+curl "http://127.0.0.1:8000/verify?frame=8DABC123C0XXXXXXXXXXXXXX"
+```
+
+For testing old frames, the timestamp freshness check can be disabled:
+
+```bash
+python verify_server.py --key-dir keys --max-age -1
+```
+
+### PoC Verification Flow
+
+```text
+make_auth_frame.py
+  DF / CA / ICAO / Type Code / Timestamp
+  + shared secret key
+  -> 24-bit truncated HMAC
+  -> DF17 TC24 frame HEX
+
+decode_auth_frame.py
+  frame HEX
+  -> DF / CA / ICAO / ME / PI
+  -> CRC/PI check
+  -> timestamp and Tag24 extraction
+
+verify_server.py
+  frame HEX
+  -> CRC/PI check
+  -> ICAO key lookup
+  -> HMAC recomputation
+  -> Tag24 comparison
+  -> JSON result
+```
+
+### Important Safety Note
+
+Do not transmit generated frames on 1090 MHz.
+
+The included scripts are for offline simulation, protocol study, and controlled laboratory demonstrations only. Any RF transmission on aviation frequencies must comply with applicable laws, regulations, authorizations, and test-environment requirements.
+
+---
+
 ## What This Scheme Can Do
 
 - Deter simple ADS-B spoofing
-- Deter old replay attacks
-- Confirm that a message was generated by a legitimate transmitter
-- Enable authenticity verification by internet-connected receivers
-- Maintain backward compatibility with existing ADS-B
+- Deter old replay attacks when keys are rotated appropriately
+- Confirm that a tag was generated by an entity possessing the shared secret key
+- Enable authenticity verification through an internet-connected verification server
+- Maintain backward compatibility with existing ADS-B receivers
+
+---
+
+## Limitations
+
+This proposal is intentionally simple and has important limitations.
+
+- A 24-bit tag is short and does not provide full-strength cryptographic authentication.
+- The verification server must protect the shared secret keys.
+- The receiver needs internet connectivity to perform online verification.
+- A valid authentication tag does not independently prove the physical location of the aircraft.
+- Additional position validation methods are still required.
+- Key provisioning, rotation, and revocation are essential but not fully specified here.
+- This is not a public-key digital signature scheme.
 
 ---
 
@@ -281,8 +395,8 @@ Use the existing DF=17 ADS-B Extended Squitter structure
 Tentatively use reserved ME Type Code 24
 Use 27-bit timestamp + 24-bit truncated HMAC as the ME payload
 Do not modify existing ADS-B frames
-Let internet-connected receivers query a verification server that shares the required HMAC key material
-Rotate keys at an interval shorter than the timestamp cycle
+Let internet-connected receivers verify the tag through an online verification server
+Rotate HMAC keys at an interval shorter than the timestamp cycle
 ```
 
 This proposal explores a lightweight additional authentication mechanism that may help reduce simple ADS-B spoofing and old replay attacks while preserving compatibility with existing ADS-B receivers.
@@ -291,10 +405,13 @@ The idea is intentionally simple. Anyone with basic knowledge of cryptographic a
 
 However, after confirming how technically straightforward ADS-B spoofing can be, I felt it would be unbalanced to discuss only the risk without also presenting a possible countermeasure direction.
 
+---
 
 ## License
+
 CC0 1.0 Universal.
 
 No attribution is required.  
 If this idea is useful, please use it freely to help reduce aviation security risks.
+
 The author does not intend to assert any copyright or patent rights over this proposal.
