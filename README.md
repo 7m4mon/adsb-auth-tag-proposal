@@ -112,6 +112,8 @@ ME Type Code
 Timestamp
 ```
 
+This is a truncated HMAC, not a truncated public-key digital signature. A public-key signature normally requires the receiver to obtain the complete signature in order to verify it with the public key. Since this proposal only allocates 24 bits for the authentication tag, the tag is intended to be verified by recomputing an HMAC with shared key material on a trusted server.
+
 ---
 
 ## What This Scheme Is Intended to Prove
@@ -120,25 +122,32 @@ This scheme is intended to prove the following:
 
 > At that time, the legitimate transmitter possessing the secret key generated this message.
 
-Furthermore, if an internet-connected receiver compares the received information with public key information, certificates, and the reception time, it can increase confidence in the following statement:
+Furthermore, if an internet-connected receiver sends the received raw authentication frame to a trusted verification server, and that server verifies the tag using the shared secret key assigned to the aircraft or transmitter, it can increase confidence in the following statement:
 
 > The aircraft was present in that airspace at that time.
+
+In this proposal, the receiver does not verify the HMAC using a public key. HMAC is a shared-secret-key mechanism. Therefore, the verification server must have access to the corresponding secret key, or to equivalent protected key material, in order to recompute the truncated HMAC and compare it with the tag received over ADS-B.
 
 ---
 
 ## Internet Connectivity Is Required on the Receiver Side
 
-This scheme assumes that the receiver can obtain the following information via the internet:
+This scheme assumes that the receiver can use the internet to query a trusted verification server.
 
-- Public key information corresponding to the aircraft or transmitter
-- Certificates
-- Key IDs
-- Revocation information
-- Key update information
+The receiver sends the received ADS-B authentication frame, for example as a raw hexadecimal string, to the verification server. The server then:
 
-In other words, this is not a scheme that can be completed entirely by a fully offline receiver.
+- Parses the DF17 frame
+- Checks the Mode S parity / CRC
+- Extracts the ICAO address, Type Code, timestamp, and truncated HMAC
+- Looks up the shared secret key or protected key material associated with that aircraft or transmitter
+- Recomputes the HMAC over the defined message fields
+- Compares the recomputed 24-bit tag with the received tag
+- Checks whether the timestamp is within an acceptable time window
+- Returns a verification result to the receiver
 
-The intended use case is verification by internet-connected ground receiving stations or network-connected ADS-B receiver systems.
+In other words, this is not a scheme that can be completed entirely by a fully offline receiver. It also does not assume that the receiver obtains a public key and verifies a digital signature locally.
+
+The intended use case is verification by internet-connected ground receiving stations or network-connected ADS-B receiver systems that can query an online verification service.
 
 ---
 
@@ -181,7 +190,7 @@ Therefore, in theory, the following replay attack is possible:
 
 > An attacker records a legitimate message and retransmits it approximately 4.25 years later when the same timestamp value occurs again.
 
-As a countermeasure, the aircraft-specific key pair or HMAC key should be updated at an interval shorter than the timestamp cycle.
+As a countermeasure, the aircraft-specific HMAC key should be updated at an interval shorter than the timestamp cycle.
 
 For example, if keys are updated once per year, a message from a previous timestamp cycle will fail HMAC verification under the current key.
 
@@ -204,11 +213,11 @@ If the secret key is stolen, any HMAC generated using that key can no longer be 
 In that case, the following actions are required:
 
 - Secret key revocation
-- Key pair update
-- Public key information update
-- Distribution of revocation information
+- HMAC key update
+- Verification server key-record update
+- Distribution of revocation or key-status information to verification servers
 
-In other words, a key management mechanism is essential. It would need to be combined with mechanisms such as a public key infrastructure, certificates, and revocation lists.
+In other words, a key management mechanism is essential. The verification infrastructure must be able to register, rotate, revoke, and protect the shared secret keys used for HMAC verification.
 
 ---
 
@@ -226,7 +235,8 @@ Existing receiver:
 
 Compatible receiver:
   Reads normal ADS-B frames and the additional authentication frame
-  Verifies authenticity using information obtained via the internet
+  Sends the raw authentication frame to an online verification server
+  Receives an authenticity result based on server-side HMAC verification
 ```
 
 ---
@@ -271,7 +281,7 @@ Use the existing DF=17 ADS-B Extended Squitter structure
 Tentatively use reserved ME Type Code 24
 Use 27-bit timestamp + 24-bit truncated HMAC as the ME payload
 Do not modify existing ADS-B frames
-Let internet-connected receivers verify the tag using public key information
+Let internet-connected receivers query a verification server that shares the required HMAC key material
 Rotate keys at an interval shorter than the timestamp cycle
 ```
 
